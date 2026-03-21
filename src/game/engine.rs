@@ -1,10 +1,24 @@
 use crate::game::types::*;
 
 impl GameState {
-    pub fn apply(&mut self, directions: Vec<Direction>) {
-        for (snake, dir) in self.snakes.iter_mut().zip(directions) {
-            self.grid.clear_snake(snake);
-            snake.r#move(dir, self.grid[snake.head()] == Cell::Food);
+    pub fn apply(&mut self, directions: &[Direction], mine: Option<bool>) {
+        for (snake, dir) in self
+            .snakes
+            .iter_mut()
+            .filter(|snake| {
+                if let Some(mine) = mine {
+                    snake.mine == mine
+                } else {
+                    true
+                }
+            })
+            .zip(directions.iter())
+        {
+            let eat = self.grid[snake.head() + dir] == Cell::Food;
+            if !eat {
+                self.grid[snake.tail()] = Cell::Empty;
+            }
+            snake.r#move(&dir, eat);
         }
 
         self.resolve_collisions();
@@ -15,48 +29,36 @@ impl GameState {
     }
 
     fn resolve_collisions(&mut self) {
-        // collisions with walls
+        let collision_grid_mask = self.grid.map(|cell| match cell {
+            Cell::Empty | Cell::Food => false,
+            _ => true,
+        });
+
         for snake in &mut self.snakes {
-            if self.grid[snake.head()] == Cell::Wall {
+            if !self.grid.in_bounds(snake.head()) || collision_grid_mask[snake.head()] {
                 snake.lose_head();
-            }
-        }
-        self.snakes.retain(|s| s.len() > 2);
-
-        // collisions with other snakes
-        for i in 0..self.snakes.len() {
-            for j in (i + 1)..self.snakes.len() {
-                if self.snakes[i].body[1..].contains(&self.snakes[j].head()) {
-                    if self.snakes[i].body[1..].contains(&self.snakes[j].head()) {
-                        self.snakes[i].lose_head();
-                    }
-                    self.snakes[j].lose_head();
-                }
-                if self.snakes[j].body[1..].contains(&self.snakes[i].head()) {
-                    self.snakes[i].lose_head();
-                }
+            } else {
+                self.grid.place_head(snake);
             }
         }
 
-        self.snakes.retain(|s| s.len() > 2);
+        // remove dead snakes (snake.len() == 2) and for each clear the grid
+        self.snakes
+            .iter()
+            .filter(|snake| snake.len() == 2)
+            .for_each(|snake| self.grid.clear_snake(snake));
+        self.snakes.retain(|snake| snake.len() > 2);
+
         self.snakes
             .iter()
             .for_each(|snake| self.grid.place_snake(snake));
 
         // gravity
-        fn is_supported(snake: &Snake, grid: &Grid) -> bool {
-            snake
-                .body
-                .iter()
-                .any(|&p| grid[p + Point::new(0, 1)] != Cell::Empty)
-        }
-
         let mut moved = true;
-
         while moved {
             moved = false;
             for snake in &mut self.snakes {
-                if !is_supported(snake, &self.grid) {
+                if !snake.supported(&self.grid) {
                     moved = true;
 
                     self.grid.clear_snake(snake);

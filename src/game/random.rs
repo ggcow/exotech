@@ -1,10 +1,8 @@
 use crate::game::types::*;
 
-const MIN_GRID_HEIGHT: i16 = 10;
-const MAX_GRID_HEIGHT: i16 = 25;
+const MIN_GRID_HEIGHT: Coord = 10;
+const MAX_GRID_HEIGHT: Coord = 25;
 const ASPECT_RATIO: f32 = 1.0;
-
-use std::time::{SystemTime, UNIX_EPOCH};
 
 // RNG minimal pseudo-aléatoire
 struct SimpleRng {
@@ -13,11 +11,9 @@ struct SimpleRng {
 
 impl SimpleRng {
     fn new() -> Self {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .subsec_nanos();
-        Self { seed: nanos as u64 }
+        Self {
+            seed: 0x12345678abcdef,
+        }
     }
 
     fn next_f64(&mut self) -> f64 {
@@ -28,8 +24,8 @@ impl SimpleRng {
         ((self.seed % 1_000_000) as f64) / 1_000_000.0
     }
 
-    fn range_i16(&mut self, min: i16, max: i16) -> i16 {
-        min + ((max - min) as f64 * self.next_f64()).round() as i16
+    fn range(&mut self, min: Coord, max: Coord) -> Coord {
+        min + ((max - min) as f64 * self.next_f64()).round() as Coord
     }
 
     fn choose<'a, T>(&mut self, slice: &'a [T]) -> Option<&'a T> {
@@ -53,9 +49,9 @@ pub fn generate_grid(league_level: i32) -> Grid {
 
     let rand = rng.next_f64();
     let height = MIN_GRID_HEIGHT
-        + ((rand.powf(skew) * (MAX_GRID_HEIGHT - MIN_GRID_HEIGHT) as f64).round() as i16);
+        + ((rand.powf(skew) * (MAX_GRID_HEIGHT - MIN_GRID_HEIGHT) as f64).round() as Coord);
 
-    let mut width = (height as f32 * ASPECT_RATIO).round() as i16;
+    let mut width = (height as f32 * ASPECT_RATIO).round() as Coord;
     if width % 2 != 0 {
         width += 1;
     }
@@ -93,7 +89,7 @@ pub fn generate_grid(league_level: i32) -> Grid {
     grid
 }
 
-fn opposite(p: Point, width: i16) -> Point {
+fn opposite(p: Point, width: Coord) -> Point {
     Point::new(width - p.x - 1, p.y)
 }
 
@@ -113,14 +109,9 @@ fn mirror(grid: &mut Grid) {
 use std::collections::{HashSet, VecDeque};
 
 fn neighbours(grid: &Grid, p: Point) -> Vec<Point> {
-    let dirs = [
-        Point::new(0, -1),
-        Point::new(1, 0),
-        Point::new(0, 1),
-        Point::new(-1, 0),
-    ];
-    dirs.iter()
-        .map(|d| *d + p)
+    DIRECTIONS
+        .iter()
+        .map(|d| p + d)
         .filter(|n| grid.in_bounds(*n))
         .collect()
 }
@@ -185,8 +176,7 @@ fn destroy_tight_spaces(grid: &mut Grid, rng: &mut SimpleRng) {
                     .collect();
 
                 if walls.len() >= 3 {
-                    let mut destroyable: Vec<_> =
-                        walls.into_iter().filter(|n| n.y <= p.y).collect();
+                    let destroyable: Vec<_> = walls.into_iter().filter(|n| n.y <= p.y).collect();
                     if let Some(target) = rng.choose(&destroyable) {
                         let opp = opposite(*target, grid.width);
                         grid[*target] = Cell::Empty;
@@ -241,7 +231,7 @@ fn sink_lowest_island(grid: &mut Grid, rng: &mut SimpleRng) {
     }
 
     if lower_by >= 2 {
-        lower_by = rng.range_i16(2, lower_by);
+        lower_by = rng.range(2, lower_by);
     }
 
     for &c in &island {

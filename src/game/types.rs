@@ -1,15 +1,15 @@
 use std::ops;
 
-type Coord = i16;
+pub type Coord = i16;
 
 #[derive(Clone)]
-pub struct Grid {
+pub struct Grid<T: Clone = Cell> {
     pub width: Coord,
     pub height: Coord,
-    pub cells: Vec<Cell>,
+    pub cells: Vec<T>,
 }
 
-impl std::fmt::Display for Grid {
+impl std::fmt::Display for Grid<Cell> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for y in 0..self.height {
             for x in 0..self.width {
@@ -17,7 +17,7 @@ impl std::fmt::Display for Grid {
                 let symbol = match cell {
                     Cell::Empty => '.',
                     Cell::Wall => '#',
-                    Cell::Snake(s) => s,
+                    Cell::Snake(id) => char::from_digit(id as u32 >> 1, 10).unwrap(),
                     Cell::Food => 'F',
                 }
                 .to_string()
@@ -30,20 +30,26 @@ impl std::fmt::Display for Grid {
     }
 }
 
-impl Grid {
+impl std::fmt::Display for Grid<bool> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let symbol = if self[Point::new(x, y)] { "# " } else { ". " };
+                write!(f, "{symbol}")?;
+            }
+            writeln!(f)?;
+        }
+        Ok(())
+    }
+}
+
+impl Grid<Cell> {
     pub fn new(rows: Vec<Vec<Cell>>) -> Self {
         Self {
             width: rows[0].len() as Coord,
             height: rows.len() as Coord,
             cells: rows.into_iter().flatten().collect(),
         }
-    }
-
-    pub fn in_bounds(&self, point: Point) -> bool {
-        point.x >= 0
-            && point.x < self.width as Coord
-            && point.y >= 0
-            && point.y < self.height as Coord
     }
 
     pub fn place_food(&mut self, point: Point) {
@@ -53,10 +59,14 @@ impl Grid {
     }
 
     pub fn place_snake(&mut self, snake: &Snake) {
-        self[snake.head()] = Cell::Snake(if snake.mine { '☺' } else { '☻' });
+        self.place_head(snake);
         for &point in &snake.body[1..] {
-            self[point] = Cell::Snake(if snake.mine { '○' } else { '•' });
+            self[point] = Cell::Snake(snake.id << 1);
         }
+    }
+
+    pub fn place_head(&mut self, snake: &Snake) {
+        self[snake.head()] = Cell::Snake(snake.id << 1 | 1);
     }
 
     pub fn clear_snake(&mut self, snake: &Snake) {
@@ -64,35 +74,49 @@ impl Grid {
             self[p] = Cell::Empty;
         }
     }
+
+    pub fn map<F, T: Clone>(&self, f: F) -> Grid<T>
+    where
+        F: Fn(&Cell) -> T,
+    {
+        Grid {
+            width: self.width,
+            height: self.height,
+            cells: self.cells.iter().map(f).collect(),
+        }
+    }
 }
 
-impl ops::IndexMut<Point> for Grid {
-    fn index_mut(&mut self, point: Point) -> &mut Cell {
-        if !self.in_bounds(point) {
-            panic!("Point out of bounds: ({}, {})", point.x, point.y);
-        }
+impl<T: Clone> Grid<T> {
+    pub fn in_bounds(&self, point: Point) -> bool {
+        point.x >= 0
+            && point.x < self.width as Coord
+            && point.y >= 0
+            && point.y < self.height as Coord
+    }
+}
+
+impl<T: Clone> ops::IndexMut<Point> for Grid<T> {
+    fn index_mut(&mut self, point: Point) -> &mut T {
         let idx = (point.y as usize) * (self.width as usize) + (point.x as usize);
         &mut self.cells[idx]
     }
 }
 
-impl ops::Index<Point> for Grid {
-    type Output = Cell;
+impl<T: Clone> ops::Index<Point> for Grid<T> {
+    type Output = T;
 
-    fn index(&self, point: Point) -> &Cell {
-        if !self.in_bounds(point) {
-            return &Cell::Wall;
-        }
+    fn index(&self, point: Point) -> &T {
         let idx = (point.y as usize) * (self.width as usize) + (point.x as usize);
-        &self.cells[idx]
+        return &self.cells[idx];
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Cell {
     Empty,
     Wall,
-    Snake(char),
+    Snake(Coord),
     Food,
 }
 
@@ -106,6 +130,11 @@ impl Point {
     pub fn new(x: Coord, y: Coord) -> Self {
         Self { x, y }
     }
+
+    pub fn supported(&self, grid: &Grid, snake: &Snake) -> bool {
+        grid[*self + Direction::Down] != Cell::Empty
+            && !matches!(grid[*self + Direction::Down], Cell::Snake(id) if id >> 1 == snake.id)
+    }
 }
 
 impl ops::Add for Point {
@@ -116,6 +145,22 @@ impl ops::Add for Point {
             x: self.x + rhs.x,
             y: self.y + rhs.y,
         }
+    }
+}
+
+impl ops::Add<&Direction> for Point {
+    type Output = Self;
+
+    fn add(self, rhs: &Direction) -> Self {
+        self + Point::from(rhs)
+    }
+}
+
+impl ops::Add<Direction> for Point {
+    type Output = Self;
+
+    fn add(self, rhs: Direction) -> Self {
+        self + &rhs
     }
 }
 
@@ -155,6 +200,7 @@ impl ops::SubAssign for Point {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Direction {
     Up,
     Down,
@@ -162,8 +208,26 @@ pub enum Direction {
     Right,
 }
 
-impl From<Direction> for Point {
-    fn from(dir: Direction) -> Self {
+pub const DIRECTIONS: [Direction; 4] = [
+    Direction::Right,
+    Direction::Left,
+    Direction::Up,
+    Direction::Down,
+];
+
+impl Direction {
+    pub fn to_string(&self) -> String {
+        match self {
+            Direction::Up => "UP".to_string(),
+            Direction::Down => "DOWN".to_string(),
+            Direction::Left => "LEFT".to_string(),
+            Direction::Right => "RIGHT".to_string(),
+        }
+    }
+}
+
+impl From<&Direction> for Point {
+    fn from(dir: &Direction) -> Self {
         match dir {
             Direction::Up => Self::new(0, -1),
             Direction::Down => Self::new(0, 1),
@@ -173,10 +237,16 @@ impl From<Direction> for Point {
     }
 }
 
-#[derive(Clone)]
+impl From<Direction> for Point {
+    fn from(dir: Direction) -> Self {
+        Self::from(&dir)
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Snake {
     pub body: Vec<Point>,
-    pub id: u8,
+    pub id: Coord,
     pub mine: bool,
 }
 
@@ -185,8 +255,12 @@ impl Snake {
         self.body[0]
     }
 
-    pub fn r#move(&mut self, dir: Direction, grow: bool) {
-        let new_head = self.head() + Point::from(dir);
+    pub fn tail(&self) -> Point {
+        self.body[self.body.len() - 1]
+    }
+
+    pub fn r#move(&mut self, dir: &Direction, grow: bool) {
+        let new_head = self.head() + dir;
         self.body.insert(0, new_head);
         if !grow {
             self.body.pop();
@@ -205,6 +279,10 @@ impl Snake {
 
     pub fn len(&self) -> usize {
         self.body.len()
+    }
+
+    pub fn supported(&self, grid: &Grid) -> bool {
+        self.body.iter().any(|&p| p.supported(grid, self))
     }
 }
 
